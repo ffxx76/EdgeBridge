@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -186,14 +187,35 @@ def probe_commands(prefix, check_url=None):
     ]
 
 
-def verify_local(port, check_url=None):
-    proxy = ["--proxy", f"http://127.0.0.1:{port}"]
+def verify_local(port, check_url=None, proxy_host="127.0.0.1"):
+    proxy = ["--proxy", f"http://{proxy_host}:{port}"]
     try:
         for command in probe_commands([], check_url):
             status = execute(command + proxy, 15)
     except (RuntimeError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError(f"控制端 HTTP/Mixed 代理 127.0.0.1:{port} 未通过验证：{error}") from error
+        raise RuntimeError(f"控制端 HTTP/Mixed 代理 {proxy_host}:{port} 未通过验证：{error}") from error
     verify_auth_http(status)
+
+
+def choose_proxy_host(port, check_url):
+    # On WSL NAT, the Windows proxy may listen on the host gateway rather
+    # than WSL's loopback. Verify the actual HTTP path before choosing it.
+    candidates = ["127.0.0.1"]
+    try:
+        if "microsoft" in Path("/proc/version").read_text().lower():
+            routes = execute(["ip", "-4", "route", "show", "default"], 5)
+            match = re.search(r"\bvia\s+(\d+\.\d+\.\d+\.\d+)", routes)
+            if match:
+                candidates.append(str(ipaddress.IPv4Address(match.group(1))))
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+        pass
+    for candidate in candidates:
+        try:
+            verify_local(port, check_url, candidate)
+            return candidate
+        except (RuntimeError, subprocess.TimeoutExpired):
+            pass
+    raise RuntimeError("无法连接本机代理。请检查 HTTP/Mixed 端口。WSL NAT 下 Windows 代理需监听 WSL 可访问的地址，或使用 mirrored 网络。也可用 --proxy-host 指定 IPv4。")
 
 
 def verify_auth_http(status):
@@ -226,14 +248,14 @@ def preflight_device(host):
         raise RuntimeError(message) from error
 
 
-def start_tunnel(host, port, log):
+def start_tunnel(host, port, log, proxy_host="127.0.0.1"):
     folder = remote(host, "umask 077; mktemp -d /tmp/edge-deploy.XXXXXXXX")
     if not REMOTE_DIR.fullmatch(folder):
         raise RuntimeError("设备 mktemp 输出异常，未创建转发")
     command = "python3 -c " + shlex.quote(BRIDGE) + " " + folder
     ssh_command = SSH + [
         "-T", "-o", "ExitOnForwardFailure=yes", "-R",
-        f"{folder}/proxy.sock:127.0.0.1:{port}", "--", host, command,
+        f"{folder}/proxy.sock:{proxy_host}:{port}", "--", host, command,
     ]
     try:
         process = subprocess.Popen(ssh_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -318,9 +340,9 @@ def supervise(host):
             folder = None
             try:
                 write_state(status_file, {"state": "starting"})
-                verify_local(config["port"], config.get("check_url"))
+                verify_local(config["port"], config.get("check_url"), config.get("proxy_host", "127.0.0.1"))
                 preflight_device(host)
-                process, folder, remote_port = start_tunnel(host, config["port"], log)
+                process, folder, remote_port = start_tunnel(host, config["port"], log, config.get("proxy_host", "127.0.0.1"))
                 status = verify_device(host, config.get("check_url"))
                 ready = {"state": "ready", "port": remote_port, "http": status,
                          "generation": config["generation"]}
@@ -385,7 +407,7 @@ def verify_or_repair(host, state, args):
     try:
         verify_device(host, args.check_url if args.proxy_only else None)
     except (RuntimeError, subprocess.TimeoutExpired):
-        write_state(state / "request.json", {"port": args.proxy_port, "check_url": args.check_url if args.proxy_only else None, "generation": time.time_ns()})
+        write_state(state / "request.json", {"port": args.proxy_port, "proxy_host": args.proxy_host, "check_url": args.check_url if args.proxy_only else None, "generation": time.time_ns()})
         wait_ready(state, args.wait)
 
 
@@ -397,14 +419,14 @@ def bootstrap(host, args):
         with (state / "command.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             active = worker_running(state)
-            if active and read_state(request, {}).get("port") != args.proxy_port:
+            if active and (read_state(request, {}).get("port") != args.proxy_port or read_state(request, {}).get("proxy_host", "127.0.0.1") != args.proxy_host):
                 raise RuntimeError("此设备的转发配置不同或正在停止，先运行 down，再重试")
             check_url = args.check_url if args.proxy_only else None
             if active and read_state(request, {}).get("check_url") != check_url:
-                write_state(request, {"port": args.proxy_port, "check_url": check_url, "generation": time.time_ns()})
+                write_state(request, {"port": args.proxy_port, "proxy_host": args.proxy_host, "check_url": check_url, "generation": time.time_ns()})
             if not active:
                 write_state(state / "status.json", {"state": "starting"})
-                write_state(request, {"port": args.proxy_port, "check_url": check_url, "generation": time.time_ns()})
+                write_state(request, {"port": args.proxy_port, "proxy_host": args.proxy_host, "check_url": check_url, "generation": time.time_ns()})
                 with (state / "tunnel.log").open("a") as log:
                     subprocess.Popen(
                         [sys.executable, str(Path(__file__).resolve()), "_supervise", host],
@@ -464,6 +486,7 @@ def main():
     up.add_argument("hosts", nargs="*")
     up.add_argument("--host-file", type=Path)
     up.add_argument("--proxy-port", required=True, type=int, help="控制端 Mihomo/Clash 的 HTTP 或 Mixed 端口")
+    up.add_argument("--proxy-host", default="auto", help="代理监听的 IPv4 地址，默认自动检测 WSL 网关")
     up.add_argument("--jobs", type=int, default=4)
     up.add_argument("--wait", type=int, default=90)
     up.add_argument("--proxy-only", action="store_true")
@@ -492,10 +515,17 @@ def main():
         parsed_url = urlsplit(args.check_url)
         if parsed_url.scheme != "https" or not parsed_url.hostname or parsed_url.username or parsed_url.password:
             parser.error("--check-url 必须是没有账号密码的 HTTPS 地址")
+        if args.proxy_host == "auto":
+            args.proxy_host = choose_proxy_host(args.proxy_port, args.check_url if args.proxy_only else None)
+        else:
+            try:
+                args.proxy_host = str(ipaddress.IPv4Address(args.proxy_host))
+            except ipaddress.AddressValueError:
+                parser.error("--proxy-host 必须是 IPv4 地址或 auto")
         if args.bundle or args.sha256:
             if not args.bundle or not args.bundle.is_file() or not re.fullmatch(r"[\da-fA-F]{64}", args.sha256 or "", re.ASCII):
                 parser.error("--bundle 必须指向本地文件，并提供受信任的 64 位十六进制 --sha256")
-        print(f"开始部署 {len(hosts)} 台设备；控制端代理 127.0.0.1:{args.proxy_port}", flush=True)
+        print(f"开始部署 {len(hosts)} 台设备；控制端代理 {args.proxy_host}:{args.proxy_port}", flush=True)
         def task(host):
             ok, result = bootstrap(host, args)
             print(f"[{'成功' if ok else '失败'}] {host}\n  {result}", flush=True)

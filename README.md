@@ -8,8 +8,8 @@
 
 ## 准备
 
-- 控制电脑使用 macOS 或 Linux，需要 Python 3.8+、OpenSSH 客户端、Bash 和 curl。
-- 控制电脑上的 HTTP 或 Mixed 代理已经启动并监听 `127.0.0.1`。用自己的实际端口替换例子中的 `7890`。
+- 控制电脑使用 macOS、Linux 或 Windows 的 WSL，需要 Python 3.8+、OpenSSH 客户端、Bash 和 curl。
+- 控制电脑上的 HTTP 或 Mixed 代理已经启动。用自己的实际端口替换例子中的 `7890`。WSL NAT 使用 Windows 代理时，代理必须在 WSL 可访问的地址监听。
 - 每台 Ubuntu 使用普通账号，已有 Python 3.8+ 和 curl，SSH 服务允许远程 Unix 套接字转发。首次使用先手动 `ssh 设备别名` 核对指纹，并确认密钥登录可用。可复用现有 SSH 配置，包括 `ProxyJump`。
 
 在能够访问 GitHub 的控制电脑上获取代码，然后进入目录：
@@ -20,6 +20,26 @@ cd EdgeBridge
 ```
 
 也可以在 GitHub 页面使用 **Code → Download ZIP** 下载并解压。下面命令都在控制电脑执行。
+
+## Windows 与 WSL
+
+建议在 WSL 终端内克隆仓库。Git 会根据 `.gitattributes` 保持脚本的 LF 行尾。已有目录如果出现 `invalid option name: pipefail`，在 WSL 终端的项目目录执行：
+
+```bash
+sed -i 's/\r$//' proxy.sh edge-codex.sh
+```
+
+Windows 命令提示符下先运行 `wsl` 进入 WSL。已检出的脚本可能仍保留 CRLF，可手动转换或重新克隆。
+
+WSL 2 NAT 模式下，Windows 的 `127.0.0.1` 与 WSL 的 `127.0.0.1` 不同。部署器会先检查 WSL 本地代理，再尝试默认网关。如果代理只监听 Windows 的回环地址，WSL NAT 无法通过网关连接。可使用支持的 WSL mirrored 网络，或者让代理监听 WSL 可访问的地址并配置防火墙。后者可能使代理被局域网访问，应限制监听范围和访问权限。Windows 11 22H2 及更高版本可参考 [Microsoft WSL 网络文档](https://learn.microsoft.com/windows/wsl/networking)。
+
+也可手动指定代理所在的 IPv4，用 `ip route show default` 查询 WSL 的 Windows 网关，替换以下示例地址：
+
+```bash
+bash proxy.sh 7890 user@edge-device --proxy-host 172.30.0.1
+```
+
+SSH 目标若只写 IP，会使用当前 WSL 用户名，目标用户名不同时写成 `user@IP`。批量部署前先确认每台设备的 SSH 主机指纹和密钥登录。
 
 ## 仅开启代理转发
 
