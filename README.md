@@ -6,6 +6,35 @@
 
 在有网络出口的控制电脑上运行。每台设备通过 SSH 借用控制电脑上的 Mihomo / Clash HTTP 或 Mixed 代理，可以共用一个上游。代理只应用于部署器启动的命令，也可以显式应用于设备上的其他命令。
 
+## 快速使用
+
+在控制电脑上获取项目：
+
+```bash
+git clone https://github.com/ffxx76/EdgeBridge.git
+cd EdgeBridge
+```
+
+**Windows CMD / PowerShell**，使用 Windows 上的代理连接一台设备：
+
+```cmd
+proxy-windows.cmd 7890 user@192.0.2.10
+```
+
+**Ubuntu 终端**，使用本机代理连接一台设备：
+
+```bash
+bash proxy.sh 7890 user@192.0.2.10
+```
+
+Ubuntu 控制电脑如果还需要为设备安装 Codex CLI：
+
+```bash
+python3 edge-deploy.py up user@192.0.2.10 --proxy-port 7890 --login
+```
+
+将 `7890`、`user` 和示例 IP 换成自己的代理端口、设备用户名与设备地址。两种方式都要求控制电脑上的 HTTP/Mixed 代理已启动，且能够 SSH 连接目标设备。仅转发入口的作用范围请见下方说明。
+
 ## 准备
 
 - macOS、Linux 或 WSL 主入口需要 Python 3.8+、OpenSSH 客户端、Bash 和 curl。Windows 原生转发入口需要 OpenSSH 客户端和 curl.exe。
