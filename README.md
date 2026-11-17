@@ -2,13 +2,13 @@
 
 通过一条命令将控制电脑的代理共享给 Ubuntu 边缘设备，并安装 Codex CLI。支持批量部署、连通性验证和断线重连。
 
-> 测试版：已通过模拟测试，尚未在真实 Ubuntu 设备上完成验证。
+> 正式版：已在 Windows 和 Ubuntu 环境中完成测试。
 
 在有网络出口的控制电脑上运行。每台设备通过 SSH 借用控制电脑上的 Mihomo / Clash HTTP 或 Mixed 代理，可以共用一个上游。代理只应用于部署器启动的命令，也可以显式应用于设备上的其他命令。
 
 ## 准备
 
-- 控制电脑使用 macOS、Linux 或 Windows 的 WSL，需要 Python 3.8+、OpenSSH 客户端、Bash 和 curl。
+- macOS、Linux 或 WSL 主入口需要 Python 3.8+、OpenSSH 客户端、Bash 和 curl。Windows 原生转发入口需要 OpenSSH 客户端和 curl.exe。
 - 控制电脑上的 HTTP 或 Mixed 代理已经启动。用自己的实际端口替换例子中的 `7890`。WSL NAT 使用 Windows 代理时，代理必须在 WSL 可访问的地址监听。
 - 每台 Ubuntu 使用普通账号，已有 Python 3.8+ 和 curl，SSH 服务允许远程 Unix 套接字转发。首次使用先手动 `ssh 设备别名` 核对指纹，并确认密钥登录可用。可复用现有 SSH 配置，包括 `ProxyJump`。
 
@@ -37,7 +37,7 @@ proxy-windows.cmd 7890 user@192.0.2.10
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\proxy-windows.ps1 -ProxyPort 7890 -Target user@192.0.2.10 -RemotePort 17891
 ```
 
-要求 Windows 安装 OpenSSH 客户端和 curl.exe，远端 Ubuntu 需要 bash 和 curl。代理环境变量只对该 SSH 终端及子进程生效，具体程序需要支持这些变量。已通过静态检查，Windows 原生入口尚未在真实 Windows 环境完成验证。
+要求 Windows 安装 OpenSSH 客户端和 curl.exe，远端 Ubuntu 需要 bash 和 curl。代理环境变量只对该 SSH 终端及子进程生效，具体程序需要支持这些变量。Windows 和 Ubuntu 环境已完成测试。
 
 ## Windows 与 WSL
 
