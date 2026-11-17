@@ -21,6 +21,24 @@ cd EdgeBridge
 
 也可以在 GitHub 页面使用 **Code → Download ZIP** 下载并解压。下面命令都在控制电脑执行。
 
+## Windows 直接使用
+
+Windows 用户可以直接在命令提示符或 PowerShell 中运行，不需要 WSL、Python 或 Git Bash：
+
+```cmd
+proxy-windows.cmd 7890 user@192.0.2.10
+```
+
+把端口替换为 Windows 上的 HTTP / Mixed 代理端口，用户名和 IP 替换为设备的 SSH 地址。首次连接按提示核对 SSH 主机指纹并登录。程序会先检查 Windows 代理，再建立 SSH 转发并检查设备能否通过代理访问 HTTPS。成功后进入设备的代理终端，在其中运行需要代理的命令；输入 `exit` 关闭连接。Windows 电脑及其代理需要保持运行。
+
+该入口适合临时连接一台设备，断开后需要重新执行命令。批量部署、后台自动重连和 Codex 安装目前需要使用 macOS、Linux 或 WSL 的主入口。远端默认使用回环端口 17890，如果冲突，可以通过 PowerShell 使用 `-RemotePort` 选择其他端口：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\proxy-windows.ps1 -ProxyPort 7890 -Target user@192.0.2.10 -RemotePort 17891
+```
+
+要求 Windows 安装 OpenSSH 客户端和 curl.exe，远端 Ubuntu 需要 bash 和 curl。代理环境变量只对该 SSH 终端及子进程生效，具体程序需要支持这些变量。已通过静态检查，Windows 原生入口尚未在真实 Windows 环境完成验证。
+
 ## Windows 与 WSL
 
 建议在 WSL 终端内克隆仓库。Git 会根据 `.gitattributes` 保持脚本的 LF 行尾。已有目录如果出现 `invalid option name: pipefail`，在 WSL 终端的项目目录执行：
