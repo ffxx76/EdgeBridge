@@ -1,0 +1,4 @@
+# 每行一个已经配置 SSH 密钥的设备别名
+# edge-device
+# edge02
+# edge03
