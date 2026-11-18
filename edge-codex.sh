@@ -143,11 +143,21 @@ if [[ "$checksum" != none ]]; then
   fi
 else
   [[ "$proxy" == direct || -x "$helper" ]] || fail "Proxy helper missing: $helper"
-  if command -v curl >/dev/null; then
+  if ! command -v curl >/dev/null && ! command -v wget >/dev/null && command -v apt-get >/dev/null && sudo -n true 2>/dev/null; then
+    printf 'TRY installing curl with passwordless sudo through the configured proxy\n'
+    routed timeout -k 5 180 sh -c '
+      sudo -n apt-get -o Acquire::http::Proxy="${http_proxy:-DIRECT}" -o Acquire::https::Proxy="${https_proxy:-DIRECT}" update &&
+      sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=30 -o Acquire::http::Proxy="${http_proxy:-DIRECT}" -o Acquire::https::Proxy="${https_proxy:-DIRECT}" install -y curl
+    ' || printf 'Automatic curl installation failed; see the package manager output above.\n' >&2
+  fi
+  if command -v curl >/dev/null || command -v wget >/dev/null; then
     printf 'TRY official standalone installer\n'
     mkdir -p "$tmp/standalone"
-    if routed curl -fsSL --retry 1 --connect-timeout 8 --max-time 30 \
-      https://chatgpt.com/codex/install.sh -o "$tmp/install.sh" &&
+    if { if command -v curl >/dev/null; then
+      routed curl -fsSL --retry 1 --connect-timeout 8 --max-time 30 https://chatgpt.com/codex/install.sh -o "$tmp/install.sh"
+    else
+      routed wget -q -t 2 -T 30 -O "$tmp/install.sh" https://chatgpt.com/codex/install.sh
+    fi; } &&
       routed timeout -k 5 120 env CODEX_NON_INTERACTIVE=1 \
         CODEX_INSTALL_DIR="$tmp/standalone" sh "$tmp/install.sh" &&
       timeout 10 "$tmp/standalone/codex" --version; then
@@ -161,7 +171,7 @@ else
   fi
   if [[ ! -x "$bin/codex" ]]; then
     command -v node >/dev/null && command -v npm >/dev/null ||
-      fail 'No usable standalone install and Node/npm unavailable. Use --bundle or rerun with a working proxy.'
+      fail 'No usable standalone install and Node/npm unavailable. If both curl and wget are missing, install either with an administrator, then retry; proxy forwarding remains active. An offline --bundle also works.'
     printf 'TRY npm with a user-owned prefix and engine checks\n'
     npm_prefix=$(mktemp -d "$cache/npm.XXXXXXXX")
     if routed timeout -k 5 150 npm install --global --prefix "$npm_prefix" \

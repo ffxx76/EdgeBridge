@@ -53,7 +53,7 @@ python3 edge-deploy.py up user@192.0.2.10 --proxy-port 7890 --login
 
 - macOS、Linux 或 WSL 主入口需要 Python 3.8+、OpenSSH 客户端、Bash 和 curl。Windows 原生转发入口需要 OpenSSH 客户端和 curl.exe。
 - 控制电脑上的 HTTP 或 Mixed 代理已经启动。用自己的实际端口替换例子中的 `7890`。WSL NAT 使用 Windows 代理时，代理必须在 WSL 可访问的地址监听。
-- 每台 Ubuntu 使用普通账号，已有 Python 3.8+ 和 curl，SSH 服务允许远程 Unix 套接字转发。首次使用先手动 `ssh 设备别名` 核对指纹，并确认密钥登录可用。可复用现有 SSH 配置，包括 `ProxyJump`。
+- 每台 Ubuntu 使用普通账号，已有带 SSL 的 Python 3.8+，SSH 服务允许远程 Unix 套接字转发。首次使用先手动 `ssh 设备别名` 核对指纹，并确认密钥登录可用。可复用现有 SSH 配置，包括 `ProxyJump`。安装 Codex 需要设备具备 curl 或 wget。
 
 在能够访问 GitHub 的控制电脑上获取代码，然后进入目录：
 
@@ -128,7 +128,27 @@ bash proxy.sh 7890 edge-device
 python3 edge-deploy.py up edge-device --proxy-port 7890 --login
 ```
 
-如账号或组织允许设备码登录，按终端提示在浏览器授权。安装阶段不需要授权。
+`--login` 会在安装完成后启动**设备码登录**。若账号或组织允许该方式，保持终端打开，在控制电脑的浏览器打开终端显示的地址、登录并输入一次性设备码，等待终端确认成功。如果已经完成安装，可以在控制电脑单独启动：
+
+```bash
+python3 edge-deploy.py login edge-device
+```
+
+设备码登录需要在 ChatGPT 账户安全设置或组织工作区中启用。设备码不可分享。详见 [OpenAI 无界面设备登录说明](https://learn.chatgpt.com/docs/auth?surface=cli#login-on-headless-devices)。
+
+如设备码登录不可用，也可以使用**浏览器回调登录**。先在控制电脑启动 EdgeBridge 代理并安装 Codex，然后从控制电脑运行：
+
+```bash
+ssh -L 1455:127.0.0.1:1455 edge-device
+```
+
+在同一个 SSH 会话的设备终端中运行：
+
+```bash
+~/.local/share/edge-deploy/with-proxy codex login
+```
+
+如果终端找不到 `codex`，请确认其安装位置已加入设备用户的 `PATH`。在控制电脑浏览器打开终端显示的登录地址，并保持 SSH 窗口及登录进程运行至成功。控制电脑的 1455 端口需要可用，回调地址和授权码不要分享。
 
 编辑 `hosts.txt`，每行一个 SSH 主机别名，支持 `#` 注释。四台并发部署，脚本逐台报告成功或失败：
 
@@ -161,8 +181,14 @@ python3 edge-deploy.py down --host-file hosts.txt
 
 - 仅转发模式从控制电脑和设备分别请求验证地址。安装 Codex 模式则检查安装地址和登录域名。登录域名收到 HTTP 响应表示能连到域名，账号可用性要等真实登录验证。
 - SSH 断开后后台自动重连。代理检查连续两次失败会重建该设备的转发。控制端代理恢复后，下一次重试会重新验证。重连优先沿用设备的本地端口，被占用时换一个；后者可能需要重开已运行的 Codex。
-- 自动尝试官方独立安装器，失败后尝试设备上已有的 Node/npm，安装在用户目录。两条都失败时可传入匹配设备架构的已验证离线包：`--bundle codex-linux.tar.gz --sha256 <发布方校验值>`。包内顶层需要可执行文件 `codex` 和它的配套文件。混合架构批量离线部署时，按架构分批执行。
-- 如果预检提示设备缺少 `curl`，在设备终端执行 `sudo apt update && sudo apt install -y curl`；该步骤需要设备管理员权限和软件源网络。安装后在控制电脑重新运行部署命令。
+- 代理连通性检查使用设备已有的 Python，不要求设备安装 curl。Codex 安装优先使用官方独立安装器，支持 curl 或 wget，失败后尝试设备已有的 Node/npm。两条都失败时可传入匹配设备架构的已验证离线包：`--bundle codex-linux.tar.gz --sha256 <发布方校验值>`。包内顶层需要可执行文件 `codex` 和它的配套文件。混合架构批量离线部署时，按架构分批执行。
+- 如果设备既没有 curl 也没有 wget，且允许免密码 sudo，程序会通过代理尝试用 apt 安装 curl。若需要管理员密码或安装失败，代理仍保持运行，可在设备终端通过下面的命令安装后重试部署。
+
+  ```bash
+  edge_proxy="http://127.0.0.1:$(cat "$HOME/.local/share/edge-deploy/proxy-port")"
+  sudo apt-get -o "Acquire::http::Proxy=$edge_proxy" -o "Acquire::https::Proxy=$edge_proxy" update
+  sudo apt-get -o "Acquire::http::Proxy=$edge_proxy" -o "Acquire::https::Proxy=$edge_proxy" install -y curl
+  ```
 - `status` 会显示背景进程状态和日志路径。SSH 密钥被拒绝时检查登录账号和密钥；未知主机指纹先手动核对。SSH 禁止 Unix 套接字转发时请设备管理员确认转发策略。控制端代理校验失败时检查端口类型、上游节点和网络。
 - 每台设备一个 SSH 隧道。后台守护会在退出终端后继续运行。控制电脑断电、关机或重启会影响整批设备，开机后运行同一条 `up` 命令恢复。需要无人值守时，在每个现场使用常开的控制机。
 - 设备侧监听仅限回环地址，设备上的其他本地用户也可能访问该端口。只连接你信任的设备。工具可在普通账号下运行，不要求修改防火墙或 SSH 服务配置。

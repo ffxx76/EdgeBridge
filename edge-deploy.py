@@ -9,12 +9,14 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import queue
 import random
 import re
 import select
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -225,8 +227,23 @@ def verify_auth_http(status):
 
 def verify_device(host, check_url=None):
     wrapper = '"$HOME/.local/share/edge-deploy/with-proxy"'
-    command = " && ".join(f"{wrapper} {shlex.join(cmd)}" for cmd in probe_commands([], check_url))
+    probe = '''import os, sys, urllib.error, urllib.request
+proxy = os.environ["https_proxy"]
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+for url in sys.argv[1:]:
+    try:
+        with opener.open(urllib.request.Request(url, headers={"User-Agent": "EdgeBridge/1"}), timeout=12) as response:
+            status = response.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+    if not 200 <= status < (400 if url != sys.argv[-1] or len(sys.argv) == 2 else 500):
+        raise SystemExit("HTTP {} for {}".format(status, url))
+    print(status)
+'''
+    urls = [check_url] if check_url else [INSTALLER, AUTH]
+    command = f"{wrapper} python3 -c {shlex.quote(probe)} " + " ".join(shlex.quote(url) for url in urls)
     status = remote(host, command, 32)
+    status = status.splitlines()[-1]
     verify_auth_http(status)
     return status
 
@@ -236,15 +253,14 @@ def preflight_device(host):
         "test \"$(uname -s)\" = Linux || { echo 'EDGE_PREFLIGHT: target must run Linux' >&2; exit 21; }; "
         "test \"$(id -u)\" != 0 || { echo 'EDGE_PREFLIGHT: connect as a non-root user' >&2; exit 22; }; "
         "command -v python3 >/dev/null || { echo 'EDGE_PREFLIGHT: python3 is missing (need 3.8+)' >&2; exit 23; }; "
-        "python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' || "
-        "{ echo 'EDGE_PREFLIGHT: python3 3.8+ is required' >&2; exit 24; }; "
-        "command -v curl >/dev/null || { echo 'EDGE_PREFLIGHT: curl is missing; install curl on the device' >&2; exit 25; }"
+        "python3 -c 'import sys, ssl; sys.exit(sys.version_info < (3, 8))' || "
+        "{ echo 'EDGE_PREFLIGHT: Python 3.8+ with SSL support is required' >&2; exit 24; }"
     )
     try:
         remote(host, command)
     except (RuntimeError, subprocess.TimeoutExpired) as error:
         detail = str(error)
-        message = f"设备预检失败，检查 SSH 密钥/主机指纹及 Linux、非 root 账号、python3 ≥ 3.8、curl：{detail}"
+        message = f"设备预检失败，检查 SSH 密钥/主机指纹及 Linux、非 root 账号、带 SSL 的 python3 ≥ 3.8：{detail}"
         if "EDGE_PREFLIGHT:" in detail or any(pattern in detail.lower() for pattern in (
             "permission denied", "host key verification failed", "host identification has changed",
             "command not found", "python3: not found",
@@ -416,6 +432,54 @@ def verify_or_repair(host, state, args):
         wait_ready(state, args.wait)
 
 
+def run_install(command, log, host, attempt):
+    print(f"[{host}] 正在安装 Codex（第 {attempt} 次），请稍候…", flush=True)
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True, bufsize=1)
+    messages = queue.Queue()
+
+    def read_output():
+        try:
+            for line in process.stdout:
+                messages.put(line)
+        finally:
+            messages.put(None)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + 400
+    next_notice = time.monotonic() + 15
+    output = []
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, 400)
+            try:
+                line = messages.get(timeout=min(1, remaining))
+            except queue.Empty:
+                if time.monotonic() >= next_notice:
+                    print(f"[{host}] 安装仍在进行，等待设备返回结果…", flush=True)
+                    next_notice = time.monotonic() + 15
+                continue
+            if line is None:
+                break
+            output.append(line)
+            log.write(line)
+            log.flush()
+            print(f"[{host}] {line}", end="", flush=True)
+            next_notice = time.monotonic() + 15
+        process.wait(timeout=max(0.1, deadline - time.monotonic()))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        reader.join(timeout=1)
+        process.stdout.close()
+    note(log, f"安装尝试 {attempt}，退出码 {process.returncode}")
+    return process.returncode, ''.join(output)
+
+
 def bootstrap(host, args):
     state = state_for(host)
     request = state / "request.json"
@@ -449,19 +513,15 @@ def bootstrap(host, args):
                 command += ["--bundle", str(args.bundle), "--sha256", args.sha256]
             with (state / "install.log").open("w") as log:
                 for attempt in range(1 if args.bundle else 2):
-                    result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                            stderr=subprocess.STDOUT, text=True, timeout=400)
-                    note(log, f"安装尝试 {attempt + 1}，退出码 {result.returncode}")
-                    log.write(result.stdout)
-                    log.flush()
-                    summary = [line for line in result.stdout.splitlines()
+                    returncode, output = run_install(command, log, host, attempt + 1)
+                    summary = [line for line in output.splitlines()
                                if line.startswith(("INSTALLED ", "LOGIN "))]
-                    if result.returncode == 0 and summary and summary[0].startswith("INSTALLED "):
+                    if returncode == 0 and summary and summary[0].startswith("INSTALLED "):
                         return True, "代理已验证；" + "；".join(summary)
                     if attempt == 0 and not args.bundle:
                         time.sleep(3)
                         verify_or_repair(host, state, args)
-            raise RuntimeError("Codex 安装失败：" + (result.stdout.strip()[-700:] or str(result.returncode)))
+            raise RuntimeError("Codex 安装失败：" + (output.strip()[-700:] or str(returncode)))
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         return False, f"{error}\n  日志目录: {state}"
 
