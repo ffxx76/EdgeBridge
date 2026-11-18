@@ -232,15 +232,20 @@ def verify_device(host, check_url=None):
 
 
 def preflight_device(host):
-    command = ("test \"$(uname -s)\" = Linux && command -v curl >/dev/null && "
-               "python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' && "
-               "test \"$(id -u)\" != 0")
+    command = (
+        "test \"$(uname -s)\" = Linux || { echo 'EDGE_PREFLIGHT: target must run Linux' >&2; exit 21; }; "
+        "test \"$(id -u)\" != 0 || { echo 'EDGE_PREFLIGHT: connect as a non-root user' >&2; exit 22; }; "
+        "command -v python3 >/dev/null || { echo 'EDGE_PREFLIGHT: python3 is missing (need 3.8+)' >&2; exit 23; }; "
+        "python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' || "
+        "{ echo 'EDGE_PREFLIGHT: python3 3.8+ is required' >&2; exit 24; }; "
+        "command -v curl >/dev/null || { echo 'EDGE_PREFLIGHT: curl is missing; install curl on the device' >&2; exit 25; }"
+    )
     try:
         remote(host, command)
     except (RuntimeError, subprocess.TimeoutExpired) as error:
         detail = str(error)
         message = f"设备预检失败，检查 SSH 密钥/主机指纹及 Linux、非 root 账号、python3 ≥ 3.8、curl：{detail}"
-        if detail == "1" or any(pattern in detail.lower() for pattern in (
+        if "EDGE_PREFLIGHT:" in detail or any(pattern in detail.lower() for pattern in (
             "permission denied", "host key verification failed", "host identification has changed",
             "command not found", "python3: not found",
         )):
