@@ -359,14 +359,20 @@ def supervise(host):
         while (config := read_state(request)) is not None:
             process = None
             folder = None
+            total_stages = 4 if config.get("check_url") else 5
+
+            def progress(step, label):
+                bar = "#" * (step - 1) + ">" + "-" * (total_stages - step)
+                write_state(status_file, {"state": "starting", "stage": f"[{bar}] {label}", "generation": config["generation"]})
+
             try:
-                write_state(status_file, {"state": "starting", "stage": "检查控制端代理", "generation": config["generation"]})
+                progress(1, "检查控制端代理")
                 verify_local(config["port"], config.get("check_url"), config.get("proxy_host", "127.0.0.1"))
-                write_state(status_file, {"state": "starting", "stage": "检查设备 SSH 和环境", "generation": config["generation"]})
+                progress(2, "检查设备 SSH 和环境")
                 preflight_device(host)
-                write_state(status_file, {"state": "starting", "stage": "建立 SSH 代理转发", "generation": config["generation"]})
+                progress(3, "建立 SSH 代理转发")
                 process, folder, remote_port = start_tunnel(host, config["port"], log, config.get("proxy_host", "127.0.0.1"))
-                write_state(status_file, {"state": "starting", "stage": "验证设备代理连接", "generation": config["generation"]})
+                progress(4, "验证设备代理连接")
                 status = verify_device(host, config.get("check_url"))
                 ready = {"state": "ready", "port": remote_port, "http": status,
                          "generation": config["generation"]}
@@ -445,7 +451,7 @@ def verify_or_repair(host, state, args):
 
 
 def run_install(command, log, host, attempt):
-    print(f"[{host}] 正在安装 Codex（第 {attempt} 次），请稍候…", flush=True)
+    print(f"[{host}] [####>] 正在安装 Codex（第 {attempt} 次），请稍候…", flush=True)
     process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, bufsize=1)
     messages = queue.Queue()
@@ -520,6 +526,7 @@ def bootstrap(host, args):
             verify_or_repair(host, state, args)
             status = wait_ready(state, args.wait, host)
             if args.proxy_only:
+                print(f"[{host}] [####] 代理连接验证完成。", flush=True)
                 return True, f"代理已验证（设备端口 {status['port']}）"
 
             command = ["bash", str(HERE / "edge-codex.sh"), "install", host, "--edge-proxy"]
@@ -531,6 +538,7 @@ def bootstrap(host, args):
                     summary = [line for line in output.splitlines()
                                if line.startswith(("INSTALLED ", "LOGIN "))]
                     if returncode == 0 and summary and summary[0].startswith("INSTALLED "):
+                        print(f"[{host}] [#####] Codex 安装完成。", flush=True)
                         return True, "代理已验证；" + "；".join(summary)
                     if attempt == 0 and not args.bundle:
                         time.sleep(3)
