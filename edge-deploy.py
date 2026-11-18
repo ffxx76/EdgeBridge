@@ -360,10 +360,13 @@ def supervise(host):
             process = None
             folder = None
             try:
-                write_state(status_file, {"state": "starting"})
+                write_state(status_file, {"state": "starting", "stage": "检查控制端代理", "generation": config["generation"]})
                 verify_local(config["port"], config.get("check_url"), config.get("proxy_host", "127.0.0.1"))
+                write_state(status_file, {"state": "starting", "stage": "检查设备 SSH 和环境", "generation": config["generation"]})
                 preflight_device(host)
+                write_state(status_file, {"state": "starting", "stage": "建立 SSH 代理转发", "generation": config["generation"]})
                 process, folder, remote_port = start_tunnel(host, config["port"], log, config.get("proxy_host", "127.0.0.1"))
+                write_state(status_file, {"state": "starting", "stage": "验证设备代理连接", "generation": config["generation"]})
                 status = verify_device(host, config.get("check_url"))
                 ready = {"state": "ready", "port": remote_port, "http": status,
                          "generation": config["generation"]}
@@ -394,7 +397,7 @@ def supervise(host):
                 note(log, f"{error}。修正后重新运行 up。")
                 return 1
             except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-                write_state(status_file, {"state": "retrying", "error": str(error)})
+                write_state(status_file, {"state": "retrying", "error": str(error), "generation": config["generation"]})
                 note(log, f"{error}。将退避重试。")
             finally:
                 if process is not None:
@@ -409,8 +412,10 @@ def supervise(host):
     return 0
 
 
-def wait_ready(state, seconds):
+def wait_ready(state, seconds, host=None):
     deadline = time.monotonic() + seconds
+    next_notice = time.monotonic() + 15
+    last_stage = None
     while time.monotonic() < deadline:
         status = read_state(state / "status.json", {})
         desired = read_state(state / "request.json", {})
@@ -419,6 +424,13 @@ def wait_ready(state, seconds):
                 raise SetupError(status["error"])
             if status.get("state") == "ready" and worker_running(state):
                 return status
+            if host and status.get("state") in ("starting", "retrying"):
+                stage = status.get("stage", "等待连接") if status["state"] == "starting" else "连接失败，正在自动重试"
+                if stage != last_stage or time.monotonic() >= next_notice:
+                    elapsed = max(0, int(seconds - (deadline - time.monotonic())))
+                    print(f"[{host}] {stage}…（已等待 {elapsed} 秒）", flush=True)
+                    last_stage = stage
+                    next_notice = time.monotonic() + 15
         time.sleep(1)
     status = read_state(state / "status.json", {})
     raise RuntimeError(f"等待代理验证超时，后台仍会重试。{status.get('error', '')}")
@@ -429,7 +441,7 @@ def verify_or_repair(host, state, args):
         verify_device(host, args.check_url if args.proxy_only else None)
     except (RuntimeError, subprocess.TimeoutExpired):
         write_state(state / "request.json", {"port": args.proxy_port, "proxy_host": args.proxy_host, "check_url": args.check_url if args.proxy_only else None, "generation": time.time_ns()})
-        wait_ready(state, args.wait)
+        wait_ready(state, args.wait, host)
 
 
 def run_install(command, log, host, attempt):
@@ -484,6 +496,7 @@ def bootstrap(host, args):
     state = state_for(host)
     request = state / "request.json"
     try:
+        print(f"[{host}] 开始处理设备…", flush=True)
         # Serialize user commands separately from the background supervisor.
         with (state / "command.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -501,10 +514,11 @@ def bootstrap(host, args):
                         [sys.executable, str(Path(__file__).resolve()), "_supervise", host],
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                     )
-            wait_ready(state, args.wait)
+            wait_ready(state, args.wait, host)
             # A running supervisor can have passed its last check some time ago.
+            print(f"[{host}] 验证设备代理连接…", flush=True)
             verify_or_repair(host, state, args)
-            status = wait_ready(state, args.wait)
+            status = wait_ready(state, args.wait, host)
             if args.proxy_only:
                 return True, f"代理已验证（设备端口 {status['port']}）"
 
@@ -581,6 +595,7 @@ def main():
         if parsed_url.scheme != "https" or not parsed_url.hostname or parsed_url.username or parsed_url.password:
             parser.error("--check-url 必须是没有账号密码的 HTTPS 地址")
         if args.proxy_host == "auto":
+            print("正在检查控制电脑的代理，请稍候…", flush=True)
             args.proxy_host = choose_proxy_host(args.proxy_port, args.check_url if args.proxy_only else None)
         else:
             try:
@@ -599,6 +614,7 @@ def main():
             results = list(pool.map(task, hosts))
         print(f"结果：{sum(results)}/{len(hosts)} 台成功", flush=True)
         if args.login and all(results):
+            print(f"[{hosts[0]}] 安装完成，正在启动设备码登录，请按终端提示在浏览器授权。", flush=True)
             return open_codex("login", hosts[0])
         return 0 if all(results) else 1
 
