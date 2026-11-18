@@ -8,7 +8,7 @@
 
 ## 快速使用
 
-在控制电脑上获取项目：
+在运行 HTTP/Mixed 代理、能通过 SSH 连接边缘设备的控制电脑上获取项目。控制电脑需要能够访问 GitHub；若不能访问，可以用另一台能访问的电脑下载 ZIP 后复制到控制电脑。边缘设备无需访问 GitHub。以下克隆和部署命令均在控制电脑执行：
 
 ```bash
 git clone https://github.com/ffxx76/EdgeBridge.git
@@ -20,6 +20,20 @@ cd EdgeBridge
 ```cmd
 proxy-windows.cmd 7890 user@192.0.2.10
 ```
+
+**Mac 终端**，使用 Mac 上的代理连接一台 Ubuntu 设备：
+
+```bash
+bash proxy.sh 7890 user@192.0.2.10
+```
+
+要在设备上同时安装 Codex CLI，可以在 Mac 上运行：
+
+```bash
+python3 edge-deploy.py up user@192.0.2.10 --proxy-port 7890 --login
+```
+
+Mac、Ubuntu 和 WSL 主入口都使用 SSH 密钥登录。首次连接前，在控制电脑执行 `ssh user@192.0.2.10` 核对设备指纹，并配置好密钥登录。代理端口应填写控制电脑上的 HTTP/Mixed 端口；设备地址填写 SSH 能够访问的目标地址。Mac 控制端尚未经过真实设备完整实测。
 
 **Ubuntu 终端**，使用本机代理连接一台设备：
 
@@ -33,7 +47,7 @@ Ubuntu 控制电脑如果还需要为设备安装 Codex CLI：
 python3 edge-deploy.py up user@192.0.2.10 --proxy-port 7890 --login
 ```
 
-将 `7890`、`user` 和示例 IP 换成自己的代理端口、设备用户名与设备地址。两种方式都要求控制电脑上的 HTTP/Mixed 代理已启动，且能够 SSH 连接目标设备。仅转发入口的作用范围请见下方说明。
+将 `7890`、`user` 和示例 IP 换成自己的代理端口、设备用户名与设备地址。上述方式都要求控制电脑上的 HTTP/Mixed 代理已启动，且能够 SSH 连接目标设备。仅转发入口的作用范围请见下方说明。
 
 ## 准备
 
@@ -48,7 +62,7 @@ git clone https://github.com/ffxx76/EdgeBridge.git
 cd EdgeBridge
 ```
 
-也可以在 GitHub 页面使用 **Code → Download ZIP** 下载并解压。下面命令都在控制电脑执行。
+也可以在 GitHub 页面使用 **Code → Download ZIP** 下载并解压。没有 GitHub 访问能力的控制电脑可接收其他电脑复制的完整目录。下面命令都在控制电脑执行。
 
 ## Windows 直接使用
 
